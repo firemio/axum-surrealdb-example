@@ -3232,6 +3232,7 @@ dependencies = [
  "surrealdb",
  "tokio",
  "tower-http",
+ "url",
 ]
 
 [[package]]

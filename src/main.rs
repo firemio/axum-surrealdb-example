@@ -1,8 +1,14 @@
 use axum::{
-    extract::State,
-    routing::get,
-    Router,
+    extract::{State, Json},
+    routing::{get, post},
+    Router, 
+    http::{StatusCode, header},
+    middleware::{self, Next},
+    response::{Response, IntoResponse},
+    body::Body,
 };
+use axum::http::Request;
+use tower_http::services::ServeDir;
 use surrealdb::engine::any::{Any, connect};
 use surrealdb::opt::auth::Root;
 use surrealdb::{Error as SurrealError, Surreal};
@@ -10,10 +16,27 @@ use std::sync::Arc;
 use serde_json::Value;
 use std::time::Duration;
 use tokio::time::sleep;
+use serde::{Deserialize, Serialize};
+use jsonwebtoken::{encode, decode, Header, Validation, EncodingKey, DecodingKey};
+
 
 struct AppState {
     db: Surreal<Any>,
 }
+
+
+#[derive(Debug, Serialize, Deserialize)]
+struct User {
+    username: String,
+    password: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Claims {
+    sub: String,
+    exp: usize,
+}
+
 
 #[derive(Debug)]
 enum CustomError {
@@ -35,6 +58,35 @@ impl std::fmt::Display for CustomError {
         }
     }
 }
+
+
+async fn login(Json(user): Json<User>) -> Result<String, (StatusCode, String)> {
+    // 簡単な例として、ハードコードされたユーザー情報を使用
+    if user.username == "admin" && user.password == "password" {
+        let claims = Claims {
+            sub: user.username,
+            exp: (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp() as usize,
+        };
+        let token = encode(&Header::default(), &claims, &EncodingKey::from_secret("secret".as_ref()))
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        Ok(token)
+    } else {
+        Err((StatusCode::UNAUTHORIZED, "Invalid username or password".to_string()))
+    }
+}
+
+
+
+async fn secret_page() -> impl IntoResponse {
+    let html = tokio::fs::read_to_string("secret/secret.html").await.unwrap();
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/html")
+        .body(html)
+        .unwrap()
+}
+
+
 
 async fn setup_db() -> Result<Surreal<Any>, CustomError> {
     let max_retries = 16;
@@ -83,6 +135,46 @@ async fn get_data(State(state): State<Arc<AppState>>) -> Result<String, String> 
     }
 }
 
+
+
+
+async fn auth_middleware(
+    req: Request<Body>,
+    next: Next,
+) -> Result<Response, (StatusCode, String)> {
+    let token = req
+        .headers()
+        .get("Authorization")
+        .and_then(|auth_header| auth_header.to_str().ok())
+        .and_then(|auth_value| {
+            if auth_value.starts_with("Bearer ") {
+                Some(auth_value[7..].to_string())
+            } else {
+                None
+            }
+        })
+        .or_else(|| {
+            req.uri()
+                .query()
+                .and_then(|q| url::form_urlencoded::parse(q.as_bytes())
+                    .find(|(key, _)| key == "token")
+                    .map(|(_, value)| value.to_string()))
+        });
+
+    if let Some(token) = token {
+        let key = b"secret";
+        let validation = Validation::default();
+        match decode::<Claims>(&token, &DecodingKey::from_secret(key), &validation) {
+            Ok(_claims) => Ok(next.run(req).await),
+            Err(_) => Err((StatusCode::UNAUTHORIZED, "Invalid token".to_string())),
+        }
+    } else {
+        Err((StatusCode::UNAUTHORIZED, "No token provided".to_string()))
+    }
+}
+
+
+
 #[tokio::main]
 async fn main() {
     println!("==== main ====");
@@ -99,8 +191,12 @@ async fn main() {
 
     println!("==== 03 ====");
     let app = Router::new()
-        .route("/data", get(get_data))
-        .with_state(state);
+		.route("/api/login", post(login))
+		.route("/api/data", get(get_data).route_layer(middleware::from_fn(auth_middleware)))
+		.route("/secret", get(secret_page).route_layer(middleware::from_fn(auth_middleware)))
+		.nest_service("/", ServeDir::new("assets"))
+		.with_state(state);
+
 
     println!("==== 04 ====");
     let listener = tokio::net::TcpListener::bind("127.0.0.1:3456").await.unwrap();

@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login and Secret Page</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 h-screen flex items-center justify-center">
+    <div id="loginForm" class="bg-white p-8 rounded-lg shadow-md w-96">
+        <h1 class="text-2xl font-bold mb-6 text-center">Login</h1>
+        <form class="space-y-4">
+            <div>
+                <label for="username" class="block mb-1">Username</label>
+                <input type="text" id="username" name="username" required class="w-full px-3 py-2 border rounded">
+            </div>
+            <div>
+                <label for="password" class="block mb-1">Password</label>
+                <input type="password" id="password" name="password" required class="w-full px-3 py-2 border rounded">
+            </div>
+            <button type="submit" class="w-full bg-blue-500 text-white py-2 rounded hover:bg-blue-600">Login</button>
+        </form>
+        <p id="loginMessage" class="mt-4 text-center text-red-500"></p>
+    </div>
+
+    <div id="secretPage" class="bg-white p-8 rounded-lg shadow-md w-96 hidden">
+        <h1 class="text-2xl font-bold mb-6 text-center">Secret Page</h1>
+        <p id="secretMessage" class="text-center"></p>
+        <button id="logoutButton" class="w-full bg-red-500 text-white py-2 rounded hover:bg-red-600 mt-4">Logout</button>
+    </div>
+
+
+
+	<script>
+		const loginForm = document.getElementById('loginForm');
+		const loginMessage = document.getElementById('loginMessage');
+	
+		loginForm.addEventListener('submit', async (e) => {
+			e.preventDefault();
+			const username = document.getElementById('username').value;
+			const password = document.getElementById('password').value;
+			const response = await fetch('/api/login', {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+				},
+				body: JSON.stringify({ username, password }),
+			});
+			if (response.ok) {
+				const token = await response.text();
+				localStorage.setItem('token', token);
+				loginMessage.textContent = 'Login successful! Redirecting...';
+				loginMessage.className = 'mt-4 text-center text-green-500';
+				// トークンを使用してシークレットページにリダイレクト
+				window.location.href = `/secret?token=${encodeURIComponent(token)}`;
+			} else {
+				const error = await response.text();
+				loginMessage.textContent = error;
+				loginMessage.className = 'mt-4 text-center text-red-500';
+			}
+		});
+	
+		// Check if user is already logged in
+		const token = localStorage.getItem('token');
+		if (token) {
+			window.location.href = `/secret?token=${encodeURIComponent(token)}`;
+		}
+	</script>
+
+
+</body>
+</html>
